@@ -2,9 +2,18 @@
 from fastapi import FastAPI, Query, HTTPException
 from typing import Optional
 from datetime import datetime
+from fastapi.middleware.cors import CORSMiddleware
+
 import pandas as pd
 
 app = FastAPI(title="Analytics API (POC)")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # You can restrict this to specific domains in production
+    allow_credentials=True,
+    allow_methods=["*"],  # or specify: ["GET", "POST", "PUT", "DELETE"]
+    allow_headers=["*"],  # or specify: ["Content-Type", "Authorization"]
+)
 
 # Load CSV once at startup
 df = pd.read_csv("./sample_data_218111.csv", sep = ";")
