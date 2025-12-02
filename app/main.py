@@ -1,10 +1,14 @@
-# app.py
+import os 
 from fastapi import FastAPI, Query, HTTPException
-from typing import Optional
-from datetime import datetime
+from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+from contextlib import contextmanager
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
-import pandas as pd
+load_dotenv()
 
 app = FastAPI(title="Analytics API (POC)")
 app.add_middleware(
@@ -15,182 +19,251 @@ app.add_middleware(
     allow_headers=["*"],  # or specify: ["Content-Type", "Authorization"]
 )
 
-# Load CSV once at startup
-df = pd.read_csv("./sample_data_218111.csv", sep = ";")
-print(df.head())
-# Parse datetime columns if needed
-if "transaction_time" in df.columns:
-    df["transaction_time"] = pd.to_datetime(df["transaction_time"])
-elif "date" in df.columns:
-    df["date"] = pd.to_datetime(df["date"])
+DB_CONFIG = {
+    'host': os.getenv('POSTGRES_HOST'),
+    'port': os.getenv('POSTGRES_PORT', '5432'),
+    'database': os.getenv('POSTGRES_DB'),
+    'user': os.getenv('POSTGRES_USER'),
+    'password': os.getenv('POSTGRES_PASSWORD'),
+    # 'sslmode': 'require'
+}
 
+@contextmanager
+def get_db_connection():
+    """Context manager for database connections"""
+    conn = psycopg2.connect(**DB_CONFIG)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+def build_filter_conditions(
+    terminal_id: Optional[str],
+    start: Optional[str],
+    end: Optional[str]
+) -> tuple[str, list]:
+    """Build WHERE clause and parameters for SQL queries"""
+    conditions = []
+    params = []
+    
+    if terminal_id:
+        conditions.append("terminal_id = %s")
+        params.append(int(terminal_id))
+    
+    if start and end:
+        conditions.append("transaction_datetime >= %s AND transaction_datetime <= %s")
+        params.extend([start, end])
+    
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
+    return where_clause, params
+
+@app.get("/")
+def root():
+    """Health check endpoint"""
+    return {"status": "healthy", "service": "Analytics API"}
 
 @app.get("/analytics/summary")
 def summary(
-    terminal_id: Optional[str] = Query(None),
-    start: Optional[str] = Query(None),
-    end: Optional[str] = Query(None),
-):
-    """Dashboard summary: total transactions, favorite operation, peak hour."""
-    data = df.copy()
-
-    # --- Combine year, month, day, hour into datetime ---
-    if {"year", "month", "day", "hour"}.issubset(data.columns):
-        data["datetime"] = pd.to_datetime(data[["year", "month", "day", "hour"]])
-    else:
-        raise HTTPException(status_code=400, detail="CSV missing required date columns.")
-
-    # --- Apply filters ---
-    if terminal_id:
-        data = data[data["terminal_id"] == int(terminal_id)]
-
-    if start and end:
-        start_dt = pd.to_datetime(start)
-        end_dt = pd.to_datetime(end)
-        data = data[(data["datetime"] >= start_dt) & (data["datetime"] <= end_dt)]
-
-    if data.empty:
-        raise HTTPException(status_code=404, detail="No data found for the filters provided.")
-
-    # --- Current summary ---
-    total_txns = len(data)
-    fav_op = data["operation"].value_counts().idxmax() if "operation" in data.columns else None
-    peak_hour = int(data["hour"].mode()[0]) if not data["hour"].empty else None
-
-    # --- Growth Calculation ---
-    txn_growth = hour_growth = None
-    if start and end:
-        period_days = (end_dt - start_dt).days
-        prev_start = start_dt - pd.Timedelta(days=period_days)
-        prev_end = start_dt - pd.Timedelta(days=1)
-
-        prev_data = df.copy()
-        if {"year", "month", "day", "hour"}.issubset(prev_data.columns):
-            prev_data["datetime"] = pd.to_datetime(prev_data[["year", "month", "day", "hour"]])
-        prev_data = prev_data[(prev_data["datetime"] >= prev_start) & (prev_data["datetime"] <= prev_end)]
-
-        if not prev_data.empty:
-            prev_txns = len(prev_data)
-            prev_peak_hour = int(prev_data["hour"].mode()[0]) if not prev_data["hour"].empty else None
-
-            txn_growth = ((total_txns - prev_txns) / prev_txns * 100) if prev_txns > 0 else None
-            if prev_peak_hour and prev_peak_hour > 0:
-                hour_growth = ((peak_hour - prev_peak_hour) / prev_peak_hour * 100)
-
-    # --- Final structured response ---
-    summary = {
-        "total_transactions": {
-            "value": int(total_txns),
-            "growth": txn_growth
-        },
-        "favorite_operation": fav_op,
-        "peak_hour": {
-            "value": int(peak_hour) if peak_hour is not None else None,
-            "growth": hour_growth
-        }
-    }
-
-    return summary
+    terminal_id: Optional[str] = Query(None, description="Filter by terminal ID"),
+    start: Optional[str] = Query(None, description="Start datetime (YYYY-MM-DD HH:MM:SS)"),
+    end: Optional[str] = Query(None, description="End datetime (YYYY-MM-DD HH:MM:SS)"),
+) -> Dict[str, Any]:
+    """
+    Dashboard summary: total transactions, favorite operation, peak hour with growth metrics
+    """
+    where_clause, params = build_filter_conditions(terminal_id, start, end)
+    
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Current period metrics
+            current_query = f"""
+            WITH metrics AS (
+                SELECT 
+                    COUNT(*) as total_txns,
+                    SUM(cant_trx) as sum_txns,
+                    MODE() WITHIN GROUP (ORDER BY operation) as fav_op,
+                    MODE() WITHIN GROUP (ORDER BY hour) as peak_hour
+                FROM transactions
+                WHERE {where_clause}
+            )
+            SELECT * FROM metrics
+            """
+            
+            cur.execute(current_query, params)
+            current = cur.fetchone()
+            
+            if not current or current['total_txns'] == 0:
+                raise HTTPException(status_code=404, detail="No data found for the filters provided")
+            
+            # Calculate growth if date range provided
+            txn_growth = None
+            hour_growth = None
+            
+            if start and end:
+                start_dt = datetime.fromisoformat(start.replace(' ', 'T'))
+                end_dt = datetime.fromisoformat(end.replace(' ', 'T'))
+                period_days = (end_dt - start_dt).days
+                
+                prev_start = start_dt - timedelta(days=period_days)
+                prev_end = start_dt - timedelta(days=1)
+                
+                prev_where = where_clause.replace(
+                    "transaction_datetime >= %s AND transaction_datetime <= %s",
+                    "transaction_datetime >= %s AND transaction_datetime <= %s"
+                )
+                prev_params = params.copy()
+                
+                # Replace date params
+                if start and end:
+                    prev_params[-2] = prev_start.isoformat()
+                    prev_params[-1] = prev_end.isoformat()
+                
+                prev_query = f"""
+                SELECT 
+                    COUNT(*) as total_txns,
+                    MODE() WITHIN GROUP (ORDER BY hour) as peak_hour
+                FROM transactions
+                WHERE {prev_where}
+                """
+                
+                cur.execute(prev_query, prev_params)
+                prev = cur.fetchone()
+                
+                if prev and prev['total_txns'] > 0:
+                    txn_growth = ((current['total_txns'] - prev['total_txns']) / prev['total_txns'] * 100)
+                    
+                    if prev['peak_hour'] and prev['peak_hour'] > 0:
+                        hour_growth = ((current['peak_hour'] - prev['peak_hour']) / prev['peak_hour'] * 100)
+            
+            return {
+                "total_transactions": {
+                    "value": int(current['total_txns']),
+                    "growth": round(txn_growth, 2) if txn_growth is not None else None
+                },
+                "favorite_operation": current['fav_op'],
+                "peak_hour": {
+                    "value": int(current['peak_hour']) if current['peak_hour'] is not None else None,
+                    "growth": round(hour_growth, 2) if hour_growth is not None else None
+                }
+            }
+            
 
 @app.get("/analytics/group-by")
 def group_by(
-    dimension: str = Query(..., description="Group by one of: channel / operation / entity"),
-    terminal_id: Optional[str] = None,
-    start: Optional[str] = None,
-    end: Optional[str] = None,
-):
-    """Group transactions by a specific dimension (channel, operation, or entity)."""
-    allowed = ["channel", "operation", "entity"]
-    if dimension not in allowed:
+    dimension: str = Query(..., description="Group by: channel, operation, or entity"),
+    terminal_id: Optional[str] = Query(None),
+    start: Optional[str] = Query(None),
+    end: Optional[str] = Query(None),
+) -> List[Dict[str, Any]]:
+    """
+    Group transactions by a specific dimension with aggregated metrics
+    """
+    allowed_dimensions = ["channel", "operation", "entity"]
+    if dimension not in allowed_dimensions:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid dimension '{dimension}'. Choose from {allowed}."
+            detail=f"Invalid dimension '{dimension}'. Choose from {allowed_dimensions}"
         )
+    
+    where_clause, params = build_filter_conditions(terminal_id, start, end)
+    
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = f"""
+            SELECT 
+                COALESCE({dimension}, 'Unknown') as {dimension},
+                SUM(cant_trx) as transactions,
+                SUM(transaction_amount) as total_amount
+            FROM transactions
+            WHERE {where_clause}
+            GROUP BY {dimension}
+            ORDER BY transactions DESC
+            """
+            
+            cur.execute(query, params)
+            results = cur.fetchall()
+            
+            if not results:
+                raise HTTPException(status_code=404, detail="No data found for the filters provided")
+            
+            return [dict(row) for row in results]
 
-    data = df.copy()
 
-    # If no datetime column, build one from year/month/day
-    if {"year", "month", "day"}.issubset(data.columns):
-        data["date"] = pd.to_datetime(
-            data[["year", "month", "day"]].astype(str).agg("-".join, axis=1),
-            errors="coerce"
-        )
-
-    # Filter by terminal_id if provided
-    if terminal_id:
-        data = data[data["terminal_id"].astype(str) == str(terminal_id)]
-
-    # Filter by date range if provided
-    if start and end:
-        try:
-            start_dt = pd.to_datetime(start)
-            end_dt = pd.to_datetime(end)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
-
-        if "date" in data.columns:
-            data = data[(data["date"] >= start_dt) & (data["date"] <= end_dt)]
-
-    if data.empty:
-        raise HTTPException(status_code=404, detail="No data found for the filters provided.")
-
-    # Validate the dimension column
-    if dimension not in data.columns:
-        raise HTTPException(status_code=400, detail=f"'{dimension}' column not found in data.")
-
-    # Aggregate
-    result = (
-        data.groupby(dimension, dropna=False)
-        .agg(transactions=("cant_trx", "sum"), total_amount=("transaction_amount", "sum"))
-        .reset_index()
-        .sort_values("transactions", ascending=False)
-    )
-
-    result[dimension] = result[dimension].fillna("Unknown")
-
-    return result.to_dict(orient="records")
 @app.get("/analytics/timeseries")
 def timeseries(
     terminal_id: Optional[str] = Query(None),
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
-):
-    """Return transaction count and total amount per day."""
-    data = df.copy()
+) -> List[Dict[str, Any]]:
+    """
+    Return transaction count and total amount aggregated by date
+    """
+    where_clause, params = build_filter_conditions(terminal_id, start, end)
+    
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = f"""
+            SELECT 
+                transaction_date::text as date,
+                SUM(cant_trx) as transactions,
+                SUM(transaction_amount) as total_amount
+            FROM transactions
+            WHERE {where_clause}
+            GROUP BY transaction_date
+            ORDER BY transaction_date
+            """
+            
+            cur.execute(query, params)
+            results = cur.fetchall()
+            
+            if not results:
+                raise HTTPException(status_code=404, detail="No data found for the filters provided")
+            
+            return [dict(row) for row in results]
 
-    # --- Combine year, month, day, hour into datetime ---
-    if {"year", "month", "day", "hour"}.issubset(data.columns):
-        data["datetime"] = pd.to_datetime(data[["year", "month", "day", "hour"]])
-    else:
-        raise HTTPException(status_code=400, detail="CSV missing required date columns.")
 
-    # --- Apply filters ---
-    if terminal_id:
-        data = data[data["terminal_id"] == int(terminal_id)]
+@app.get("/analytics/hourly-distribution")
+def hourly_distribution(
+    terminal_id: Optional[str] = Query(None),
+    start: Optional[str] = Query(None),
+    end: Optional[str] = Query(None),
+) -> List[Dict[str, Any]]:
+    """
+    Get transaction distribution by hour of day
+    """
+    where_clause, params = build_filter_conditions(terminal_id, start, end)
+    
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = f"""
+            SELECT 
+                hour,
+                SUM(cant_trx) as transactions,
+                SUM(transaction_amount) as total_amount
+            FROM transactions
+            WHERE {where_clause}
+            GROUP BY hour
+            ORDER BY hour
+            """
+            
+            cur.execute(query, params)
+            results = cur.fetchall()
+            
+            return [dict(row) for row in results]
 
-    if start and end:
-        start_dt = pd.to_datetime(start)
-        end_dt = pd.to_datetime(end)
-        data = data[(data["datetime"] >= start_dt) & (data["datetime"] <= end_dt)]
 
-    if data.empty:
-        raise HTTPException(status_code=404, detail="No data found for the filters provided.")
+@app.get("/analytics/terminals")
+def list_terminals() -> List[int]:
+    """
+    Get list of all available terminal IDs
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT terminal_id FROM transactions ORDER BY terminal_id")
+            results = cur.fetchall()
+            return [row[0] for row in results if row[0] is not None]
 
-    # --- Extract only date (drop hour) ---
-    data["date"] = data["datetime"].dt.date
 
-    # --- Group by date ---
-    result = (
-        data.groupby("date")
-        .agg(
-            transactions=("cant_trx", "sum") if "cant_trx" in data.columns else ("datetime", "count"),
-            total_amount=("transaction_amount", "sum") if "transaction_amount" in data.columns else None
-        )
-        .reset_index()
-        .sort_values("date")
-    )
-
-    # --- Clean NaN columns (if total_amount not available) ---
-    result = result.dropna(axis=1, how="all")
-
-    return result.to_dict(orient="records")
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

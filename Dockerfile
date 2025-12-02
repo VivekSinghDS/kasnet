@@ -1,9 +1,7 @@
-FROM public.ecr.aws/docker/library/python:3.11
+FROM public.ecr.aws/docker/library/python:3.11-slim
 
 RUN useradd -ms /bin/bash appuser
 WORKDIR /home/appuser
-
-# RUN apt-get update && apt-get install libsm6 libxext6  -y && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./requirements.txt
 RUN pip install -r requirements.txt
