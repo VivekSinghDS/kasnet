@@ -20,12 +20,11 @@ app.add_middleware(
 )
 
 DB_CONFIG = {
-    'host': os.getenv('POSTGRES_HOST'),
+    'host': 'postgres' if os.environ.get("MODE") == "docker" else os.getenv('POSTGRES_HOST', 'localhost'),
     'port': os.getenv('POSTGRES_PORT', '5432'),
     'database': os.getenv('POSTGRES_DB'),
     'user': os.getenv('POSTGRES_USER'),
     'password': os.getenv('POSTGRES_PASSWORD'),
-    # 'sslmode': 'require'
 }
 
 @contextmanager
