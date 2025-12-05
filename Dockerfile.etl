@@ -1,0 +1,13 @@
+FROM public.ecr.aws/docker/library/python:3.11-slim
+
+RUN useradd -ms /bin/bash appuser
+WORKDIR /home/appuser
+
+COPY requirements.txt ./requirements.txt
+RUN pip install -r requirements.txt
+
+USER appuser
+EXPOSE 8000
+COPY --chown=appuser:appuser . .
+
+CMD ["python", "app/etl_job.py"]

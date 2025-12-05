@@ -37,7 +37,8 @@ class S3ToPostgresETL:
             'password': os.getenv('POSTGRES_PASSWORD'),
         }
         
-        if self.db_config['host'] not in ['localhost', '127.0.0.1']:
+        # Only require SSL for external connections (not localhost or Docker service name)
+        if self.db_config['host'] not in ['localhost', '127.0.0.1', 'postgres']:
             self.db_config['sslmode'] = 'require'
         
     def get_db_connection(self):
