@@ -19,7 +19,14 @@ class GroqRecommendationClient:
         if not self.api_key:
             raise ValueError("GROQ_API_KEY not found in environment variables")
         
-        self.client = Groq(api_key=self.api_key)
+        try:
+            # Initialize with minimal parameters to avoid compatibility issues
+            self.client = Groq(api_key=self.api_key)
+        except TypeError as e:
+            # Fallback for older SDK versions
+            logger.error(f"Groq client initialization error: {e}")
+            raise RuntimeError(f"Failed to initialize Groq client. Please check SDK version. Error: {e}")
+        
         self.model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
         
     def generate_recommendations(

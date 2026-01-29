@@ -1,5 +1,6 @@
 import json
 from typing import Dict, Any
+from decimal import Decimal
 
 # Data dictionary and column definitions
 DATA_DICTIONARY = {
@@ -135,6 +136,25 @@ Structure:
 """
 
 
+def _convert_decimals(obj: Any) -> Any:
+    """
+    Recursively convert Decimal objects to float for JSON serialization.
+    
+    Args:
+        obj: Object that may contain Decimal values
+        
+    Returns:
+        Object with Decimals converted to floats
+    """
+    if isinstance(obj, Decimal):
+        return float(obj)
+    elif isinstance(obj, dict):
+        return {key: _convert_decimals(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [_convert_decimals(item) for item in obj]
+    return obj
+
+
 def format_prompt(
     terminal_id: str, 
     recommendation_type: str, 
@@ -159,8 +179,9 @@ def format_prompt(
         for key, value in DATA_DICTIONARY.items()
     ])
     
-    # Format aggregated data as readable JSON
-    aggregated_data_str = json.dumps(aggregated_data, indent=2)
+    # Convert Decimals to floats and format aggregated data as readable JSON
+    aggregated_data_clean = _convert_decimals(aggregated_data)
+    aggregated_data_str = json.dumps(aggregated_data_clean, indent=2)
     
     return RECOMMENDATION_PROMPT.format(
         data_dictionary=data_dict_str,

@@ -317,6 +317,33 @@ def recommendations(
             f"Generating {recommendation_type} recommendations for terminal {terminal_id}"
         )
         
+        # Check data availability and adjust date range if needed
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 
+                        MIN(transaction_date) as min_date,
+                        MAX(transaction_date) as max_date
+                    FROM transactions
+                    WHERE terminal_id = %s
+                """, (int(terminal_id),))
+                data_check = cur.fetchone()
+                
+                if data_check and data_check[0] and data_check[1]:
+                    available_max = data_check[1]
+                    requested_start = datetime.fromisoformat(start_str.replace(' ', 'T')).date()
+                    
+                    # If data is older than requested period, use most recent available data
+                    if available_max < requested_start:
+                        logger.warning(
+                            f"No data in requested period. Using most recent {rec_config['period_days']} days "
+                            f"of available data (ending {available_max})"
+                        )
+                        end_date = datetime.combine(available_max, datetime.max.time())
+                        start_date = end_date - timedelta(days=rec_config["period_days"])
+                        start_str = start_date.strftime("%Y-%m-%d %H:%M:%S")
+                        end_str = end_date.strftime("%Y-%m-%d %H:%M:%S")
+        
         # Gather all analytics data
         summary_data = summary(
             terminal_id=terminal_id, 

@@ -211,6 +211,42 @@ class S3ToPostgresETL:
             """, (status, files_processed))
             conn.commit()
     
+    def display_sample_terminals(self, conn, limit: int = 10):
+        """Display sample terminal IDs for testing"""
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT 
+                    terminal_id,
+                    COUNT(*) as transaction_count,
+                    MIN(transaction_date) as earliest_date,
+                    MAX(transaction_date) as latest_date
+                FROM transactions
+                WHERE terminal_id IS NOT NULL
+                GROUP BY terminal_id
+                ORDER BY transaction_count DESC
+                LIMIT %s
+            """, (limit,))
+            results = cur.fetchall()
+            
+            if results:
+                logger.info("\n" + "="*80)
+                logger.info("📊 SAMPLE TERMINAL IDs FOR TESTING")
+                logger.info("="*80)
+                logger.info(f"{'Terminal ID':<15} {'Transactions':<15} {'Date Range'}")
+                logger.info("-"*80)
+                
+                for row in results:
+                    terminal_id, txn_count, earliest, latest = row
+                    date_range = f"{earliest} to {latest}"
+                    logger.info(f"{terminal_id:<15} {txn_count:<15} {date_range}")
+                
+                logger.info("="*80)
+                logger.info(f"💡 Test the recommendations endpoint with any terminal ID above:")
+                logger.info(f"   curl 'http://localhost:8000/analytics/recommendations?terminal_id={results[0][0]}&recommendation_type=short'")
+                logger.info("="*80 + "\n")
+            else:
+                logger.warning("No terminal IDs found in database")
+    
     def run(self, download_sample: bool = False):
         """Main ETL process"""
         logger.info("Starting ETL job")
@@ -228,6 +264,9 @@ class S3ToPostgresETL:
             
             if not new_files:
                 logger.info("No new files to process")
+                # Still show available terminals for testing
+                self.display_sample_terminals(conn, limit=10)
+                conn.close()
                 return
             
             files_processed = 0
@@ -266,6 +305,9 @@ class S3ToPostgresETL:
             
             self.update_sync_metadata(conn, files_processed)
             logger.info(f"ETL job completed. Processed {files_processed} files")
+            
+            # Display sample terminal IDs for testing
+            self.display_sample_terminals(conn, limit=10)
             
             conn.close()
             
