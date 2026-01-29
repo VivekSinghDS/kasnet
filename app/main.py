@@ -1,4 +1,5 @@
 import os 
+import logging
 from fastapi import FastAPI, Query, HTTPException
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
@@ -8,7 +9,12 @@ from contextlib import contextmanager
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+from app.utils.constants import RECOMMENDATION_TYPES, format_prompt
+from app.utils.groq_client import GroqRecommendationClient
+
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Analytics API (POC)")
 app.add_middleware(
@@ -261,6 +267,140 @@ def list_terminals() -> List[int]:
             cur.execute("SELECT DISTINCT terminal_id FROM transactions ORDER BY terminal_id")
             results = cur.fetchall()
             return [row[0] for row in results if row[0] is not None]
+
+
+@app.get("/analytics/recommendations")
+def recommendations(
+    terminal_id: str = Query(..., description="Terminal ID (required)"),
+    recommendation_type: str = Query(
+        ..., 
+        description="Type: short (7d), medium (30d), or long (90d)"
+    ),
+) -> Dict[str, Any]:
+    """
+    Generate AI-powered business recommendations based on terminal analytics.
+    
+    This endpoint automatically:
+    1. Determines the analysis period based on recommendation_type
+    2. Gathers data from summary, group-by, hourly-distribution, and timeseries
+    3. Sends aggregated data to Groq AI for analysis
+    4. Returns structured, actionable recommendations
+    
+    Args:
+        terminal_id: Terminal identifier to analyze
+        recommendation_type: short (7d), medium (30d), or long (90d)
+        
+    Returns:
+        Dictionary containing recommendations with priorities and metrics
+        
+    Raises:
+        HTTPException: If invalid parameters or data gathering fails
+    """
+    # Validate recommendation type
+    if recommendation_type not in RECOMMENDATION_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid recommendation_type '{recommendation_type}'. "
+                   f"Choose from: {list(RECOMMENDATION_TYPES.keys())}"
+        )
+    
+    # Calculate date range based on recommendation type
+    rec_config = RECOMMENDATION_TYPES[recommendation_type]
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=rec_config["period_days"])
+    
+    start_str = start_date.strftime("%Y-%m-%d %H:%M:%S")
+    end_str = end_date.strftime("%Y-%m-%d %H:%M:%S")
+    
+    try:
+        logger.info(
+            f"Generating {recommendation_type} recommendations for terminal {terminal_id}"
+        )
+        
+        # Gather all analytics data
+        summary_data = summary(
+            terminal_id=terminal_id, 
+            start=start_str, 
+            end=end_str
+        )
+        
+        channel_data = group_by(
+            dimension="channel",
+            terminal_id=terminal_id,
+            start=start_str,
+            end=end_str
+        )
+        
+        operation_data = group_by(
+            dimension="operation",
+            terminal_id=terminal_id,
+            start=start_str,
+            end=end_str
+        )
+        
+        entity_data = group_by(
+            dimension="entity",
+            terminal_id=terminal_id,
+            start=start_str,
+            end=end_str
+        )
+        
+        hourly_data = hourly_distribution(
+            terminal_id=terminal_id,
+            start=start_str,
+            end=end_str
+        )
+        
+        timeseries_data = timeseries(
+            terminal_id=terminal_id,
+            start=start_str,
+            end=end_str
+        )
+        
+        # Aggregate all data
+        aggregated_data = {
+            "terminal_id": terminal_id,
+            "analysis_period": {
+                "start": start_str,
+                "end": end_str,
+                "days": rec_config["period_days"]
+            },
+            "summary": summary_data,
+            "distribution_by_channel": channel_data,
+            "distribution_by_operation": operation_data,
+            "distribution_by_entity": entity_data,
+            "hourly_distribution": hourly_data,
+            "daily_timeseries": timeseries_data
+        }
+        
+        # Format prompt and call AI
+        prompt = format_prompt(
+            terminal_id=terminal_id,
+            recommendation_type=recommendation_type,
+            aggregated_data=aggregated_data
+        )
+        
+        groq_client = GroqRecommendationClient()
+        recommendations_result = groq_client.generate_recommendations(prompt)
+        
+        # Return enriched response
+        return {
+            "terminal_id": terminal_id,
+            "recommendation_type": recommendation_type,
+            "analysis_period": aggregated_data["analysis_period"],
+            "generated_at": datetime.now().isoformat(),
+            **recommendations_result
+        }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions (e.g., 404 from underlying endpoints)
+        raise
+    except Exception as e:
+        logger.error(f"Error generating recommendations: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate recommendations: {str(e)}"
+        )
 
 
 if __name__ == "__main__":
