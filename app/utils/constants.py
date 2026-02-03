@@ -78,6 +78,7 @@ Analyze the provided data to identify {max_recommendations} HIGH-IMPACT opportun
 4. **Prioritized**: Use P0 (critical/urgent), P1 (important), P2 (beneficial) based on potential impact
 5. **Contextual**: Consider the recommendation type: {recommendation_type}
    - {recommendation_description}
+6. **Business-Focused**: Write recommendations for business operators, NOT technical staff. Avoid technical jargon like "API", "logs", "system architecture", "database queries", etc. Use simple, clear business language that any terminal operator can understand and act upon.
 
 # FOCUS AREAS
 - Identify performance gaps (e.g., underperforming hours, channels, or operations)
@@ -128,27 +129,27 @@ Structure:
     "en": [
       {{
         "priority": "P0",
-        "title": "Investigate Lunch Hour Service Gap",
-        "rationale": "48% transaction drop during 12:00-14:00 window compared to morning peak, indicating potential service availability issue",
+        "title": "Boost Lunch Hour Transactions",
+        "rationale": "48% fewer transactions during 12:00-14:00 compared to morning peak - this is prime time when customers need services most",
         "data_driven_actions": [
-          "Analyze transaction logs for 12:00-14:00 to identify system downtime patterns",
-          "Review if certain operations/channels are unavailable during this window",
-          "Compare hour-by-hour availability % against network average"
+          "Check if the terminal is fully operational during lunch hours",
+          "Verify all services (withdrawals, deposits, transfers) are available at this time",
+          "Consider adding staff support during peak lunch demand"
         ],
-        "success_metric": "Reduce lunch hour drop from 48% to <20% within 30 days"
+        "success_metric": "Increase lunch hour transactions by 30% within 30 days"
       }}
     ],
     "esp": [
       {{
         "priority": "P0",
-        "title": "Investigar brecha de servicio en hora de almuerzo",
-        "rationale": "Caída del 48% en transacciones durante la ventana de 12:00-14:00 comparado con el pico matutino, indicando posible problema de disponibilidad del servicio",
+        "title": "Aumentar transacciones en hora de almuerzo",
+        "rationale": "48% menos transacciones durante 12:00-14:00 comparado con el pico matutino - este es horario clave cuando los clientes más necesitan servicios",
         "data_driven_actions": [
-          "Analizar registros de transacciones de 12:00-14:00 para identificar patrones de inactividad del sistema",
-          "Revisar si ciertas operaciones/canales no están disponibles durante esta ventana",
-          "Comparar el % de disponibilidad hora por hora contra el promedio de la red"
+          "Verificar que el terminal esté completamente operativo durante las horas de almuerzo",
+          "Confirmar que todos los servicios (retiros, depósitos, transferencias) estén disponibles en este horario",
+          "Considerar agregar personal de apoyo durante la demanda pico del almuerzo"
         ],
-        "success_metric": "Reducir la caída en hora de almuerzo del 48% a <20% en 30 días"
+        "success_metric": "Aumentar transacciones en hora de almuerzo en 30% en 30 días"
       }}
     ]
   }}
@@ -163,6 +164,7 @@ Structure:
 - Every metric mentioned must come from the provided data
 - Avoid generic advice like "increase marketing" without data-specific context
 - Focus on {recommendation_type}-term ({period_days} day analysis) actions aligned with: {recommendation_description}
+- Keep language simple and non-technical. The audience is business operators, not IT staff. Instead of "analyze logs" say "check service availability". Instead of "system downtime" say "service interruptions".
 """
 
 
