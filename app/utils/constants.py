@@ -92,36 +92,66 @@ Provide ONLY a valid JSON response with no additional text, markdown formatting,
 
 Structure:
 {{
-  "recommendations": [
-    {{
-      "priority": "P0|P1|P2",
-      "title": "Clear, action-oriented title (max 60 chars)",
-      "rationale": "Data-backed explanation with specific numbers and comparisons",
-      "data_driven_actions": [
-        "Specific, measurable action 1",
-        "Specific, measurable action 2",
-        "Specific, measurable action 3"
-      ],
-      "success_metric": "Clear target with specific numbers and timeframe"
-    }}
-  ]
+  "recommendations": {{
+    "en": [
+      {{
+        "priority": "P0|P1|P2",
+        "title": "Clear, action-oriented title (max 60 chars)",
+        "rationale": "Data-backed explanation with specific numbers and comparisons",
+        "data_driven_actions": [
+          "Specific, measurable action 1",
+          "Specific, measurable action 2",
+          "Specific, measurable action 3"
+        ],
+        "success_metric": "Clear target with specific numbers and timeframe"
+      }}
+    ],
+    "esp": [
+      {{
+        "priority": "P0|P1|P2",
+        "title": "Título claro y orientado a la acción (máx 60 caracteres)",
+        "rationale": "Explicación basada en datos con números específicos y comparaciones",
+        "data_driven_actions": [
+          "Acción específica y medible 1",
+          "Acción específica y medible 2",
+          "Acción específica y medible 3"
+        ],
+        "success_metric": "Objetivo claro con números específicos y plazo"
+      }}
+    ]
+  }}
 }}
 
 # EXAMPLE OUTPUT
 {{
-  "recommendations": [
-    {{
-      "priority": "P0",
-      "title": "Investigate Lunch Hour Service Gap",
-      "rationale": "48% transaction drop during 12:00-14:00 window compared to morning peak, indicating potential service availability issue",
-      "data_driven_actions": [
-        "Analyze transaction logs for 12:00-14:00 to identify system downtime patterns",
-        "Review if certain operations/channels are unavailable during this window",
-        "Compare hour-by-hour availability % against network average"
-      ],
-      "success_metric": "Reduce lunch hour drop from 48% to <20% within 30 days"
-    }}
-  ]
+  "recommendations": {{
+    "en": [
+      {{
+        "priority": "P0",
+        "title": "Investigate Lunch Hour Service Gap",
+        "rationale": "48% transaction drop during 12:00-14:00 window compared to morning peak, indicating potential service availability issue",
+        "data_driven_actions": [
+          "Analyze transaction logs for 12:00-14:00 to identify system downtime patterns",
+          "Review if certain operations/channels are unavailable during this window",
+          "Compare hour-by-hour availability % against network average"
+        ],
+        "success_metric": "Reduce lunch hour drop from 48% to <20% within 30 days"
+      }}
+    ],
+    "esp": [
+      {{
+        "priority": "P0",
+        "title": "Investigar brecha de servicio en hora de almuerzo",
+        "rationale": "Caída del 48% en transacciones durante la ventana de 12:00-14:00 comparado con el pico matutino, indicando posible problema de disponibilidad del servicio",
+        "data_driven_actions": [
+          "Analizar registros de transacciones de 12:00-14:00 para identificar patrones de inactividad del sistema",
+          "Revisar si ciertas operaciones/canales no están disponibles durante esta ventana",
+          "Comparar el % de disponibilidad hora por hora contra el promedio de la red"
+        ],
+        "success_metric": "Reducir la caída en hora de almuerzo del 48% a <20% en 30 días"
+      }}
+    ]
+  }}
 }}
 
 # DATA PROVIDED
