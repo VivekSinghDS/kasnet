@@ -9,8 +9,10 @@ from contextlib import contextmanager
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from app.utils.constants import RECOMMENDATION_TYPES, format_prompt
-from app.utils.groq_client import GroqRecommendationClient
+from app.utils.constants import (
+    RECOMMENDATION_TYPES, 
+    generate_daily_digest
+)
 
 load_dotenv()
 
@@ -278,20 +280,16 @@ def recommendations(
     ),
 ) -> Dict[str, Any]:
     """
-    Generate AI-powered business recommendations based on terminal analytics.
+    Generate daily digest recommendations based on terminal analytics.
     
-    This endpoint automatically:
-    1. Determines the analysis period based on recommendation_type
-    2. Gathers data from summary, group-by, hourly-distribution, and timeseries
-    3. Sends aggregated data to Groq AI for analysis
-    4. Returns structured, actionable recommendations
+    V1: Returns a simple 2-sentence daily digest about yesterday's performance.
     
     Args:
         terminal_id: Terminal identifier to analyze
         recommendation_type: short (7d), medium (30d), or long (90d)
         
     Returns:
-        Dictionary containing recommendations with priorities and metrics
+        Dictionary containing daily_digest with 2 sentences in English and Spanish
         
     Raises:
         HTTPException: If invalid parameters or data gathering fails
@@ -314,7 +312,7 @@ def recommendations(
     
     try:
         logger.info(
-            f"Generating {recommendation_type} recommendations for terminal {terminal_id}"
+            f"Generating {recommendation_type} daily digest for terminal {terminal_id}"
         )
         
         # Check data availability and adjust date range if needed
@@ -344,31 +342,10 @@ def recommendations(
                         start_str = start_date.strftime("%Y-%m-%d %H:%M:%S")
                         end_str = end_date.strftime("%Y-%m-%d %H:%M:%S")
         
-        # Gather all analytics data
+        # Gather required analytics data for daily digest
         summary_data = summary(
             terminal_id=terminal_id, 
             start=start_str, 
-            end=end_str
-        )
-        
-        channel_data = group_by(
-            dimension="channel",
-            terminal_id=terminal_id,
-            start=start_str,
-            end=end_str
-        )
-        
-        operation_data = group_by(
-            dimension="operation",
-            terminal_id=terminal_id,
-            start=start_str,
-            end=end_str
-        )
-        
-        entity_data = group_by(
-            dimension="entity",
-            terminal_id=terminal_id,
-            start=start_str,
             end=end_str
         )
         
@@ -384,49 +361,34 @@ def recommendations(
             end=end_str
         )
         
-        # Aggregate all data
-        aggregated_data = {
+        # Generate daily digest (2 sentences)
+        daily_digest = generate_daily_digest(
+            timeseries_data=timeseries_data,
+            summary_data=summary_data,
+            hourly_data=hourly_data
+        )
+        
+        # Return V1 response with daily digest only
+        return {
             "terminal_id": terminal_id,
+            "recommendation_type": recommendation_type,
             "analysis_period": {
                 "start": start_str,
                 "end": end_str,
                 "days": rec_config["period_days"]
             },
-            "summary": summary_data,
-            "distribution_by_channel": channel_data,
-            "distribution_by_operation": operation_data,
-            "distribution_by_entity": entity_data,
-            "hourly_distribution": hourly_data,
-            "daily_timeseries": timeseries_data
-        }
-        
-        # Format prompt and call AI
-        prompt = format_prompt(
-            terminal_id=terminal_id,
-            recommendation_type=recommendation_type,
-            aggregated_data=aggregated_data
-        )
-        
-        groq_client = GroqRecommendationClient()
-        recommendations_result = groq_client.generate_recommendations(prompt)
-        
-        # Return enriched response
-        return {
-            "terminal_id": terminal_id,
-            "recommendation_type": recommendation_type,
-            "analysis_period": aggregated_data["analysis_period"],
             "generated_at": datetime.now().isoformat(),
-            **recommendations_result
+            "daily_digest": daily_digest
         }
         
     except HTTPException:
         # Re-raise HTTP exceptions (e.g., 404 from underlying endpoints)
         raise
     except Exception as e:
-        logger.error(f"Error generating recommendations: {e}", exc_info=True)
+        logger.error(f"Error generating daily digest: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to generate recommendations: {str(e)}"
+            detail=f"Failed to generate daily digest: {str(e)}"
         )
 
 
