@@ -1,5 +1,7 @@
 import os 
 import logging
+import uuid
+import json
 from fastapi import FastAPI, Query, HTTPException
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
@@ -7,7 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from contextlib import contextmanager
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, Json
+from pydantic import BaseModel
 
 from app.utils.constants import (
     RECOMMENDATION_TYPES, 
@@ -17,6 +20,15 @@ from app.utils.constants import (
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+class StatusUpdate(BaseModel):
+    """Request model for updating recommendation status"""
+    terminal_id: int
+    status: str
+    username: str
+    date: Optional[str] = None
+
 
 app = FastAPI(title="Analytics API (POC)")
 app.add_middleware(
@@ -271,7 +283,7 @@ def list_terminals() -> List[int]:
             return [row[0] for row in results if row[0] is not None]
 
 
-@app.get("/analytics/recommendations")
+@app.post("/analytics/recommendations")
 def recommendations(
     terminal_id: str = Query(..., description="Terminal ID (required)"),
     recommendation_type: str = Query(
@@ -280,7 +292,7 @@ def recommendations(
     ),
 ) -> Dict[str, Any]:
     """
-    Generate daily digest recommendations based on terminal analytics.
+    Generate and store daily digest recommendations based on terminal analytics.
     
     V1: Returns a simple 2-sentence daily digest about yesterday's performance.
     
@@ -289,7 +301,7 @@ def recommendations(
         recommendation_type: short (7d), medium (30d), or long (90d)
         
     Returns:
-        Dictionary containing daily_digest with 2 sentences in English and Spanish
+        Dictionary containing agent_id, daily_digest with 2 sentences in English and Spanish
         
     Raises:
         HTTPException: If invalid parameters or data gathering fails
@@ -368,8 +380,8 @@ def recommendations(
             hourly_data=hourly_data
         )
         
-        # Return V1 response with daily digest only
-        return {
+        # Build response
+        response_data = {
             "terminal_id": terminal_id,
             "recommendation_type": recommendation_type,
             "analysis_period": {
@@ -381,6 +393,31 @@ def recommendations(
             "daily_digest": daily_digest
         }
         
+        # Generate unique agent_id and store in database
+        agent_id = str(uuid.uuid4())
+        
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO agent_recommendations 
+                    (agent_id, terminal_id, recommendation_type, recommendations, status, updated_by)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (
+                    agent_id,
+                    int(terminal_id),
+                    recommendation_type,
+                    Json(response_data),
+                    'generated',
+                    'AI'
+                ))
+                conn.commit()
+        
+        logger.info(f"Stored recommendations with agent_id: {agent_id}")
+        
+        # Return response with agent_id
+        response_data["agent_id"] = agent_id
+        return response_data
+        
     except HTTPException:
         # Re-raise HTTP exceptions (e.g., 404 from underlying endpoints)
         raise
@@ -390,6 +427,183 @@ def recommendations(
             status_code=500,
             detail=f"Failed to generate daily digest: {str(e)}"
         )
+
+
+@app.get("/analytics/recommendations/fetch")
+def fetch_recommendations(
+    terminal_id: str = Query(..., description="Terminal ID (required)"),
+    date: Optional[str] = Query(None, description="Specific date (YYYY-MM-DD)"),
+    last_n_days: Optional[int] = Query(None, description="Fetch from last N days")
+) -> List[Dict[str, Any]]:
+    """
+    Fetch stored recommendations for a terminal by date or last N days.
+    
+    Args:
+        terminal_id: Terminal identifier
+        date: Optional specific date in YYYY-MM-DD format
+        last_n_days: Optional number of days to fetch (default: 7)
+        
+    Returns:
+        List of recommendation records ordered by created_at DESC
+        
+    Raises:
+        HTTPException: If no recommendations found
+    """
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if date:
+                # Fetch for specific date
+                query = """
+                    SELECT 
+                        agent_id, terminal_id, recommendation_type, 
+                        recommendations, status, created_at, updated_at, updated_by
+                    FROM agent_recommendations
+                    WHERE terminal_id = %s 
+                    AND DATE(created_at) = %s
+                    ORDER BY created_at DESC
+                """
+                cur.execute(query, (int(terminal_id), date))
+            elif last_n_days:
+                # Fetch for last N days
+                query = """
+                    SELECT 
+                        agent_id, terminal_id, recommendation_type, 
+                        recommendations, status, created_at, updated_at, updated_by
+                    FROM agent_recommendations
+                    WHERE terminal_id = %s 
+                    AND created_at >= NOW() - INTERVAL '%s days'
+                    ORDER BY created_at DESC
+                """
+                cur.execute(query, (int(terminal_id), last_n_days))
+            else:
+                # Default: last 7 days
+                query = """
+                    SELECT 
+                        agent_id, terminal_id, recommendation_type, 
+                        recommendations, status, created_at, updated_at, updated_by
+                    FROM agent_recommendations
+                    WHERE terminal_id = %s 
+                    AND created_at >= NOW() - INTERVAL '7 days'
+                    ORDER BY created_at DESC
+                """
+                cur.execute(query, (int(terminal_id),))
+            
+            results = cur.fetchall()
+            
+            if not results:
+                raise HTTPException(
+                    status_code=404, 
+                    detail=f"No recommendations found for terminal {terminal_id}"
+                )
+            
+            return [dict(row) for row in results]
+
+
+@app.put("/analytics/recommendations/status")
+def update_recommendation_status(
+    update: StatusUpdate
+) -> Dict[str, Any]:
+    """
+    Update recommendation status for a terminal by terminal_id and optional date.
+    
+    Args:
+        update: StatusUpdate model containing terminal_id, status, username, and optional date
+        
+    Returns:
+        Dictionary with count of updated records and their details
+        
+    Raises:
+        HTTPException: If no recommendations found or invalid status
+    """
+    # Validate status
+    valid_statuses = ['generated', 'retrieved', 'archived', 'deleted']
+    if update.status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{update.status}'. Must be one of: {valid_statuses}"
+        )
+    
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if update.date:
+                # Update for specific terminal_id and date
+                query = """
+                    UPDATE agent_recommendations
+                    SET status = %s, 
+                        updated_by = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE terminal_id = %s 
+                    AND DATE(created_at) = %s
+                    RETURNING agent_id, terminal_id, created_at, status, updated_by, updated_at
+                """
+                cur.execute(query, (update.status, update.username, update.terminal_id, update.date))
+            else:
+                # Update ALL recommendations for terminal_id
+                query = """
+                    UPDATE agent_recommendations
+                    SET status = %s, 
+                        updated_by = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE terminal_id = %s
+                    RETURNING agent_id, terminal_id, created_at, status, updated_by, updated_at
+                """
+                cur.execute(query, (update.status, update.username, update.terminal_id))
+            
+            results = cur.fetchall()
+            conn.commit()
+            
+            if not results:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No recommendations found for terminal_id {update.terminal_id}"
+                          + (f" on {update.date}" if update.date else "")
+                )
+            
+            return {
+                "updated_count": len(results),
+                "updated_records": [dict(row) for row in results]
+            }
+
+
+@app.delete("/analytics/recommendations")
+def delete_recommendations(
+    last_n_days: int = Query(..., description="Delete recommendations older than N days")
+) -> Dict[str, Any]:
+    """
+    Delete recommendations older than N days ago.
+    
+    Args:
+        last_n_days: Delete recommendations with created_at older than N days
+        
+    Returns:
+        Dictionary with count of deleted records and their agent_ids
+        
+    Raises:
+        HTTPException: If last_n_days is invalid
+    """
+    if last_n_days < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="last_n_days must be at least 1"
+        )
+    
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            # Delete recommendations older than N days
+            cur.execute("""
+                DELETE FROM agent_recommendations
+                WHERE created_at < NOW() - INTERVAL '%s days'
+                RETURNING agent_id
+            """, (last_n_days,))
+            
+            deleted_ids = [row[0] for row in cur.fetchall()]
+            conn.commit()
+            
+            return {
+                "deleted_count": len(deleted_ids),
+                "deleted_agent_ids": deleted_ids,
+                "message": f"Deleted {len(deleted_ids)} recommendations older than {last_n_days} days"
+            }
 
 
 if __name__ == "__main__":

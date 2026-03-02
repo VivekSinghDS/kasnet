@@ -148,6 +148,33 @@ class S3ToPostgresETL:
         
         logger.info("Table and indexes created/verified")
     
+    def create_recommendations_table(self, conn):
+        """Create agent_recommendations table with proper indexes"""
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS agent_recommendations (
+            id SERIAL PRIMARY KEY,
+            agent_id VARCHAR(100) NOT NULL UNIQUE,
+            terminal_id INTEGER NOT NULL,
+            recommendation_type VARCHAR(20) NOT NULL,
+            recommendations JSONB NOT NULL,
+            status VARCHAR(50) DEFAULT 'generated',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_by VARCHAR(100) DEFAULT 'AI'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_agent_id ON agent_recommendations(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_terminal_id_recs ON agent_recommendations(terminal_id);
+        CREATE INDEX IF NOT EXISTS idx_created_at ON agent_recommendations(created_at);
+        CREATE INDEX IF NOT EXISTS idx_status ON agent_recommendations(status);
+        """
+        
+        with conn.cursor() as cur:
+            cur.execute(create_table_sql)
+            conn.commit()
+        
+        logger.info("Recommendations table and indexes created/verified")
+    
     def load_data_to_postgres(self, df: pd.DataFrame, source_file: str, conn):
         """Bulk insert data with upsert"""
         df['source_file'] = source_file
@@ -256,6 +283,7 @@ class S3ToPostgresETL:
             logger.info("Connected to PostgreSQL")
             
             self.create_table_if_not_exists(conn)
+            self.create_recommendations_table(conn)
             
             last_sync = self.get_last_sync_time(conn)
             logger.info(f"Last sync time: {last_sync}")
