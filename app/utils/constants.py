@@ -1,8 +1,13 @@
 import json
+import logging
+import os
 from typing import Dict, Any, List
 from decimal import Decimal
 from datetime import datetime, timedelta
 from statistics import mean, stdev
+from openai import OpenAI
+
+logger = logging.getLogger(__name__)
 
 # Data dictionary and column definitions
 DATA_DICTIONARY = {
@@ -231,51 +236,56 @@ def format_prompt(
 def generate_daily_digest(
     timeseries_data: List[Dict[str, Any]],
     summary_data: Dict[str, Any],
-    hourly_data: List[Dict[str, Any]]
-) -> Dict[str, List[str]]:
+    hourly_data: List[Dict[str, Any]],
+    terminal_id: str = "unknown",
+    recommendation_type: str = "short"
+) -> Dict[str, Any]:
     """
-    Generate a simple 2-sentence daily digest about yesterday's performance.
-    
+    Generate an AI-powered daily digest using OpenAI based on terminal analytics data.
+
+    Sends summary, timeseries, and hourly data to OpenAI and returns structured
+    recommendations in both English and Spanish.
+
     Returns:
-        Dictionary with 'en' and 'esp' keys containing 2 digest sentences each
+        Dictionary with 'en' and 'esp' keys containing recommendation objects,
+        or a fallback dict with error strings if the AI call fails.
     """
     if not timeseries_data or len(timeseries_data) < 2:
         return {
             "en": ["Insufficient data for daily digest."],
             "esp": ["Datos insuficientes para el resumen diario."]
         }
-    
-    # Get yesterday's data (most recent) and calculate averages
-    yesterday = timeseries_data[-1]
-    all_transactions = [float(day.get('transactions', 0)) for day in timeseries_data]
-    avg_daily_txns = mean(all_transactions) if all_transactions else 0
-    yesterday_txns = float(yesterday.get('transactions', 0))
-    
-    # Calculate variance from average
-    if avg_daily_txns > 0:
-        pct_diff = ((yesterday_txns - avg_daily_txns) / avg_daily_txns) * 100
-        trend = "above" if pct_diff >= 0 else "below"
-        trend_esp = "por encima del" if pct_diff >= 0 else "por debajo del"
-    else:
-        pct_diff = 0
-        trend = "at"
-        trend_esp = "igual al"
-    
-    # Find peak hour
-    peak_hour = summary_data.get('peak_hour', {}).get('value', 12)
-    
-    # Build 2-sentence digest with natural language
-    digest_en = [
-        f"Yesterday recorded {int(yesterday_txns):,} transactions, which is {abs(pct_diff):.1f}% {trend} the daily average of {int(avg_daily_txns):,}.",
-        f"Peak activity occurred at {peak_hour}:00 hours; staffing and service availability should be optimized around this time."
-    ]
-    
-    digest_esp = [
-        f"Ayer se registraron {int(yesterday_txns):,} transacciones, un {abs(pct_diff):.1f}% {trend_esp} promedio diario de {int(avg_daily_txns):,}.",
-        f"La actividad pico ocurrió a las {peak_hour}:00 horas; se recomienda optimizar el personal y los servicios en este horario."
-    ]
-    
-    return {"en": digest_en, "esp": digest_esp}
+
+    aggregated_data = {
+        "summary": summary_data,
+        "timeseries": timeseries_data,
+        "hourly_distribution": hourly_data,
+    }
+
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    prompt = format_prompt(
+        terminal_id=terminal_id,
+        recommendation_type=recommendation_type,
+        aggregated_data=aggregated_data,
+    )
+
+    try:
+        client = OpenAI(api_key=api_key, timeout=30.0)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(response.choices[0].message.content)
+        return result.get("recommendations", {"en": [], "esp": []})
+    except Exception as e:
+        logger.error(f"OpenAI daily digest generation failed: {e}", exc_info=True)
+        return {
+            "en": ["Unable to generate AI insights at this time."],
+            "esp": ["No se pudieron generar los insights de IA en este momento."]
+        }
 
 
 def generate_monthly_projections(

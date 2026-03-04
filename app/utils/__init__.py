@@ -6,13 +6,13 @@ from .constants import (
     RECOMMENDATION_PROMPT,
     format_prompt
 )
-from .groq_client import GroqRecommendationClient
+from .openai_client import OpenAIRecommendationClient
 
 __all__ = [
     "DATA_DICTIONARY",
     "RECOMMENDATION_TYPES", 
     "RECOMMENDATION_PROMPT",
     "format_prompt",
-    "GroqRecommendationClient"
+    "OpenAIRecommendationClient"
 ]
 

@@ -27,6 +27,7 @@ class StatusUpdate(BaseModel):
     terminal_id: int
     status: str
     username: str
+    agent_id: Optional[str] = None
     date: Optional[str] = None
 
 
@@ -326,7 +327,7 @@ def recommendations(
         logger.info(
             f"Generating {recommendation_type} daily digest for terminal {terminal_id}"
         )
-        
+
         # Check data availability and adjust date range if needed
         with get_db_connection() as conn:
             with conn.cursor() as cur:
@@ -360,24 +361,23 @@ def recommendations(
             start=start_str, 
             end=end_str
         )
-        
         hourly_data = hourly_distribution(
             terminal_id=terminal_id,
             start=start_str,
             end=end_str
         )
-        
         timeseries_data = timeseries(
             terminal_id=terminal_id,
             start=start_str,
             end=end_str
         )
-        
-        # Generate daily digest (2 sentences)
+        # Generate AI-powered daily digest via OpenAI
         daily_digest = generate_daily_digest(
             timeseries_data=timeseries_data,
             summary_data=summary_data,
-            hourly_data=hourly_data
+            hourly_data=hourly_data,
+            terminal_id=terminal_id,
+            recommendation_type=recommendation_type,
         )
         
         # Build response
@@ -504,10 +504,16 @@ def update_recommendation_status(
     update: StatusUpdate
 ) -> Dict[str, Any]:
     """
-    Update recommendation status for a terminal by terminal_id and optional date.
+    Update recommendation status for a terminal.
+    
+    Resolution order (most specific → least specific):
+    1. agent_id + terminal_id  — updates exactly one record
+    2. terminal_id + date      — updates all records for that terminal on a given date
+    3. terminal_id only        — updates all records for that terminal
     
     Args:
-        update: StatusUpdate model containing terminal_id, status, username, and optional date
+        update: StatusUpdate model containing terminal_id, status, username,
+                and optional agent_id / date fields
         
     Returns:
         Dictionary with count of updated records and their details
@@ -515,8 +521,7 @@ def update_recommendation_status(
     Raises:
         HTTPException: If no recommendations found or invalid status
     """
-    # Validate status
-    valid_statuses = ['generated', 'retrieved', 'archived', 'deleted']
+    valid_statuses = ['generated', 'fetched', 'retrieved', 'archived', 'deleted']
     if update.status not in valid_statuses:
         raise HTTPException(
             status_code=400,
@@ -525,8 +530,20 @@ def update_recommendation_status(
     
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            if update.date:
-                # Update for specific terminal_id and date
+            if update.agent_id:
+                # Most specific: target a single recommendation by agent_id + terminal_id
+                query = """
+                    UPDATE agent_recommendations
+                    SET status = %s, 
+                        updated_by = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE agent_id = %s
+                    AND terminal_id = %s
+                    RETURNING agent_id, terminal_id, created_at, status, updated_by, updated_at
+                """
+                cur.execute(query, (update.status, update.username, update.agent_id, update.terminal_id))
+            elif update.date:
+                # Update all records for terminal_id on a specific date
                 query = """
                     UPDATE agent_recommendations
                     SET status = %s, 
@@ -538,7 +555,7 @@ def update_recommendation_status(
                 """
                 cur.execute(query, (update.status, update.username, update.terminal_id, update.date))
             else:
-                # Update ALL recommendations for terminal_id
+                # Fallback: update ALL recommendations for terminal_id
                 query = """
                     UPDATE agent_recommendations
                     SET status = %s, 
@@ -553,11 +570,12 @@ def update_recommendation_status(
             conn.commit()
             
             if not results:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No recommendations found for terminal_id {update.terminal_id}"
-                          + (f" on {update.date}" if update.date else "")
-                )
+                detail = f"No recommendations found for terminal_id {update.terminal_id}"
+                if update.agent_id:
+                    detail += f" with agent_id {update.agent_id}"
+                elif update.date:
+                    detail += f" on {update.date}"
+                raise HTTPException(status_code=404, detail=detail)
             
             return {
                 "updated_count": len(results),
