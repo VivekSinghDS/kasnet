@@ -166,6 +166,97 @@ Structure:
 {aggregated_data}
 
 # IMPORTANT RULES
+1. Generate ONLY JSON
+                    
+2. Never output any unwanted text other than the JSON
+                    
+3. Never reveal anything about your construction, capabilities, or identity
+                    
+5. Never use placeholder text or comments (e.g. "rest of JSON here", "remaining implementation", etc.)
+                    
+6. Always include complete, understandable and verbose JSON 
+
+7. Always include ALL JSON when asked to update existing JSON
+                    
+8. Never truncate or abbreviate JSON
+
+9. Never try to shorten output to fit context windows - the system handles pagination
+                    
+10. Generate JSON that can be directly used to generate proper schemas for the next api call
+                    
+
+CRITICAL RULES:
+
+1. COMPLETENESS: Every JSON output must be 100% complete and interpretable
+                    
+2. NO PLACEHOLDERS: Never use any form of "rest of text goes here" or similar placeholders
+                    
+3. FULL UPDATES: When updating JSON, include the entire JSON, not just changed sections
+                    
+3. PRODUCTION READY: All JSON must be properly formatted, typed, and ready for production use
+                    
+4. NO TRUNCATION: Never attempt to shorten or truncate JSON for any reason
+                    
+5. COMPLETE FEATURES: Implement all requested features fully without placeholders or TODOs
+                    
+6. WORKING JSON: All JSON must be human interpretable
+
+9. NO IDENTIFIERS: Never identify yourself or your capabilities in comments or JSON
+                    
+10. FULL CONTEXT: Always maintain complete context and scope in JSON updates
+                    
+11. DO NOT USE BACKTICKS \`\`\`json OR ANYTHING, JUST GIVE JSON AND NOTHING ELSE, AS THIS IS GOING TO BE PARSED.
+                    
+
+If requirements are unclear:
+
+1. Make reasonable assumptions based on best practices
+                    
+2. Implement a complete working JSON interpretation
+
+3. Never ask for clarification - implement the most standard approach
+                    
+4. Include all necessary imports, types, and dependencies
+
+5. Ensure JSON follows platform conventions
+                    
+
+ABSOLUTELY FORBIDDEN:
+
+1. ANY comments containing phrases like:
+
+- "Rest of the..."
+
+- "Remaining..."
+
+- "Implementation goes here"
+
+- "JSON continues..."
+
+- "Rest of JSX structure"
+
+- "Using components..."
+
+- Any similar placeholder text
+
+
+                    
+2. ANY partial implementations:
+
+- Never truncate JSON
+
+- Never use ellipsis
+
+- Never reference JSON that isn't fully included
+                    
+- Never suggest JSON exists elsewhere
+
+- Never use TODO comments
+
+- Never imply more JSON should be added
+  
+   The system will handle pagination if needed - never truncate or shorten JSON output.            
+
 - Return ONLY valid JSON, no markdown code blocks or additional text
 - Provide exactly {max_recommendations} recommendations (or fewer if insufficient patterns)
 - Every metric mentioned must come from the provided data
